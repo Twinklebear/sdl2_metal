@@ -1,0 +1,20 @@
+cmake_minimum_required(VERSION 3.5)
+project(sdl2_metal)
+
+add_definitions(-DSDL_MAIN_HANDLED)
+
+set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} "${CMAKE_CURRENT_LIST_DIR}/cmake")
+
+find_package(Threads REQUIRED)
+find_package(SDL2 REQUIRED)
+
+add_executable(sdl2_metal main.mm)
+
+set_target_properties(sdl2_metal PROPERTIES
+    CXX_STANDARD 14
+    CXX_STANDARD_REQUIRED ON)
+
+target_include_directories(sdl2_metal PUBLIC
+    $<BUILD_INTERFACE:${SDL2_INCLUDE_DIR}>)
+
+target_link_libraries(sdl2_metal PUBLIC ${SDL2_LIBRARY})
