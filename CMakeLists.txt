@@ -17,6 +17,9 @@ if (NOT METAL_LIB)
     message(FATAL_ERROR "Metal not found")
 endif()
 
+# That this isn't an error by default is insane
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Werror=objc-method-access")
+
 # Build the Metal shader library
 add_custom_command(OUTPUT shaders.metallib
     COMMAND xcrun -sdk macosx metal -c ${CMAKE_CURRENT_LIST_DIR}/shaders.metal -o shaders.air

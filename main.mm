@@ -216,11 +216,39 @@ int main(int argc, const char **argv)
         command_buffer = [command_queue commandBuffer];
         command_encoder = [command_buffer accelerationStructureCommandEncoder];
 
-        [command_encoder copyAndCmopactAccelerationStructure:scratch_blas
+        [command_encoder copyAndCompactAccelerationStructure:scratch_blas
                                      toAccelerationStructure:blas];
         [command_encoder endEncoding];
         [command_buffer commit];
         // Could wait here again too
+    }
+
+    // Setup an instance for this BLAS
+    id<MTLBuffer> instance_buffer =
+        [device newBufferWithLength:sizeof(MTLAccelerationStructureInstanceDescriptor)
+                            options:MTLResourceStorageModeManaged];
+    {
+        MTLAccelerationStructureInstanceDescriptor *instance =
+            reinterpret_cast<MTLAccelerationStructureInstanceDescriptor *>(
+                instance_buffer.contents);
+        instance->accelerationStructureIndex = 0;
+        instance->intersectionFunctionTableOffset = 0;
+        instance->mask = 1;
+
+        // Note: Column-major in Metal
+        std::memset(&instance->transformationMatrix, 0, sizeof(MTLPackedFloat4x3));
+        instance->transformationMatrix.columns[0][0] = 1.f;
+        instance->transformationMatrix.columns[1][1] = 1.f;
+        instance->transformationMatrix.columns[2][2] = 1.f;
+
+        [instance_buffer didModifyRange:NSMakeRange(0, instance_buffer.length)];
+    }
+
+    id<MTLAccelerationStructure> tlas;
+    {
+        MTLInstanceAccelerationStructureDescriptor *tlas_desc =
+            [MTLInstanceAccelerationStructureDescriptor descriptor];
+        // tlas_desc.
     }
 
     // Now build the TLAS
