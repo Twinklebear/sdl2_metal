@@ -165,33 +165,36 @@ int main(int argc, const char **argv)
             }
         }
 
-        // Does it need some autorelease here in the loop?
-        id<CAMetalDrawable> render_target = [metal_layer nextDrawable];
-        if (!render_target) {
-            std::cout << "No render target?\n";
-            continue;
+        @autoreleasepool {
+            id<CAMetalDrawable> render_target = [metal_layer nextDrawable];
+            if (!render_target) {
+                std::cout << "No render target?\n";
+                continue;
+            }
+
+            render_pass_desc.colorAttachments[0].texture = render_target.texture;
+
+            id<MTLCommandBuffer> command_buffer = [command_queue commandBuffer];
+            id<MTLRenderCommandEncoder> command_encoder =
+                [command_buffer renderCommandEncoderWithDescriptor:render_pass_desc];
+
+            [command_encoder setViewport:(MTLViewport){0,
+                                                       0,
+                                                       static_cast<double>(win_width),
+                                                       static_cast<double>(win_height),
+                                                       0,
+                                                       1}];
+            // Render our triangle!
+            [command_encoder setRenderPipelineState:pipeline];
+            [command_encoder setVertexBuffer:vertex_buffer offset:0 atIndex:0];
+            [command_encoder drawPrimitives:MTLPrimitiveTypeTriangle
+                                vertexStart:0
+                                vertexCount:3];
+
+            [command_encoder endEncoding];
+            [command_buffer presentDrawable:render_target];
+            [command_buffer commit];
         }
-
-        render_pass_desc.colorAttachments[0].texture = render_target.texture;
-
-        id<MTLCommandBuffer> command_buffer = [command_queue commandBuffer];
-        id<MTLRenderCommandEncoder> command_encoder =
-            [command_buffer renderCommandEncoderWithDescriptor:render_pass_desc];
-
-        [command_encoder setViewport:(MTLViewport){0,
-                                                   0,
-                                                   static_cast<double>(win_width),
-                                                   static_cast<double>(win_height),
-                                                   0,
-                                                   1}];
-        // Render our triangle!
-        [command_encoder setRenderPipelineState:pipeline];
-        [command_encoder setVertexBuffer:vertex_buffer offset:0 atIndex:0];
-        [command_encoder drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
-
-        [command_encoder endEncoding];
-        [command_buffer presentDrawable:render_target];
-        [command_buffer commit];
     }
 
     SDL_DestroyWindow(window);
