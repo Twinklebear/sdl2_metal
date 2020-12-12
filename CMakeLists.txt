@@ -17,6 +17,18 @@ if (NOT METAL_LIB)
     message(FATAL_ERROR "Metal not found")
 endif()
 
+# Build the Metal shader library
+add_custom_command(OUTPUT shaders.metallib
+    COMMAND xcrun -sdk macosx metal -c ${CMAKE_CURRENT_LIST_DIR}/shaders.metal -o shaders.air
+    COMMAND xcrun -sdk macosx metallib shaders.air -o shaders.metallib
+    DEPENDS ${CMAKE_CURRENT_LIST_DIR}/shaders.metal
+    BYPRODUCTS shaders.air)
+
+add_custom_target(shader_library_wrapper ALL DEPENDS shaders.metallib)
+
+add_library(shader_library INTERFACE)
+add_dependencies(shader_library shader_library_wrapper)
+
 add_executable(sdl2_metal main.mm)
 
 set_target_properties(sdl2_metal PROPERTIES
@@ -30,4 +42,6 @@ target_link_libraries(sdl2_metal
     PUBLIC
     ${SDL2_LIBRARY}
     ${QUARTZ_CORE}
-    ${METAL_LIB})
+    ${METAL_LIB}
+    shader_library)
+
