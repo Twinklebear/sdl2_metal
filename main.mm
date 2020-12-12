@@ -73,7 +73,7 @@ int main(int argc, const char **argv)
         return -1;
     }
 
-    SDL_Window *window = SDL_CreateWindow("SDL2 + Metal",
+    SDL_Window *window = SDL_CreateWindow("SDL2 + Metal Ray Tracing",
                                           SDL_WINDOWPOS_CENTERED,
                                           SDL_WINDOWPOS_CENTERED,
                                           win_width,
@@ -148,6 +148,82 @@ int main(int argc, const char **argv)
                                                       options:MTLResourceStorageModeManaged];
     std::memcpy(vertex_buffer.contents, vertex_data, vertex_buffer.length);
     [vertex_buffer didModifyRange:NSMakeRange(0, vertex_buffer.length)];
+
+    // Create the acceleration structure for the triangle
+    MTLAccelerationStructureTriangleGeometryDescriptor *geom_desc =
+        [MTLAccelerationStructureTriangleGeometryDescriptor descriptor];
+    geom_desc.vertexBuffer = vertex_buffer;
+    geom_desc.vertexStride = sizeof(Vertex);
+    geom_desc.triangleCount = 1;
+    // TODO: Seems like Metal is inline ray tracing style, but also has some stuff
+    // for "opaque triangle" intersection functions and visible ones? How does the
+    // pipeline map out when using those? Are they more like any hit or closest hit?
+    // Won't be using intersection table here for now
+    geom_desc.intersectionFunctionTableOffset = 0;
+    geom_desc.opaque = YES;
+
+    MTLPrimitiveAccelerationStructureDescriptor *blas_desc =
+        [MTLPrimitiveAccelerationStructureDescriptor descriptor];
+    blas_desc.geometryDescriptors = @[geom_desc];
+
+    id<MTLAccelerationStructure> blas;
+    {
+        // Does it need an autoreleaseblock?
+        // Build then compact the BLAS
+        MTLAccelerationStructureSizes accel_sizes =
+            [device accelerationStructureSizesWithDescriptor:blas_desc];
+        std::cout << "Acceleration structure sizes:\n"
+                  << "\tstructure size: " << accel_sizes.accelerationStructureSize << "b\n"
+                  << "\tscratch size: " << accel_sizes.buildScratchBufferSize << "b\n";
+
+        id<MTLAccelerationStructure> scratch_blas =
+            [device newAccelerationStructureWithSize:accel_sizes.accelerationStructureSize];
+
+        id<MTLBuffer> scratch_buffer =
+            [device newBufferWithLength:accel_sizes.buildScratchBufferSize
+                                options:MTLResourceStorageModePrivate];
+
+        id<MTLCommandBuffer> command_buffer = [command_queue commandBuffer];
+        id<MTLAccelerationStructureCommandEncoder> command_encoder =
+            [command_buffer accelerationStructureCommandEncoder];
+
+        // Readback buffer to get the compacted size
+        id<MTLBuffer> compacted_size_buffer =
+            [device newBufferWithLength:sizeof(uint32_t) options:MTLResourceStorageModeShared];
+
+        // Queue the BLAS build
+        [command_encoder buildAccelerationStructure:scratch_blas
+                                         descriptor:blas_desc
+                                      scratchBuffer:scratch_buffer
+                                scratchBufferOffset:0];
+
+        // Get the compacted size back from the build
+        [command_encoder writeCompactedAccelerationStructureSize:scratch_blas
+                                                        toBuffer:compacted_size_buffer
+                                                          offset:0];
+
+        // Submit the buffer and wait for the build so we can read back the compact size
+        [command_encoder endEncoding];
+        [command_buffer commit];
+        [command_buffer waitUntilCompleted];
+
+        uint32_t compact_size = *reinterpret_cast<uint32_t *>(compacted_size_buffer.contents);
+        std::cout << "Compact size: " << compact_size << "b\n";
+
+        // Now allocate the compact BLAS and compact the structure into it
+        // For our single triangle BLAS this won't make it any smaller, but shows how it's done
+        blas = [device newAccelerationStructureWithSize:compact_size];
+        command_buffer = [command_queue commandBuffer];
+        command_encoder = [command_buffer accelerationStructureCommandEncoder];
+
+        [command_encoder copyAndCmopactAccelerationStructure:scratch_blas
+                                     toAccelerationStructure:blas];
+        [command_encoder endEncoding];
+        [command_buffer commit];
+        // Could wait here again too
+    }
+
+    // Now build the TLAS
 
     bool done = false;
     while (!done) {
