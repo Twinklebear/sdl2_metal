@@ -66,6 +66,11 @@ int win_height = 720;
 
 @end
 
+id<MTLAccelerationStructure> build_acceleration_structure(
+    id<MTLDevice> device,
+    id<MTLCommandQueue> command_queue,
+    MTLAccelerationStructureDescriptor *desc);
+
 int main(int argc, const char **argv)
 {
     if (SDL_Init(SDL_INIT_EVERYTHING) != 0) {
@@ -106,13 +111,10 @@ int main(int argc, const char **argv)
     CAMetalLayer *metal_layer = (CAMetalLayer *)[metal_view layer];
     metal_layer.device = device;
     metal_layer.pixelFormat = MTLPixelFormatBGRA8Unorm_sRGB;
+    // We want to use the targets as shader writable textures
+    metal_layer.framebufferOnly = NO;
 
     id<MTLCommandQueue> command_queue = [device newCommandQueue];
-
-    MTLRenderPassDescriptor *render_pass_desc = [MTLRenderPassDescriptor new];
-    render_pass_desc.colorAttachments[0].loadAction = MTLLoadActionClear;
-    render_pass_desc.colorAttachments[0].storeAction = MTLStoreActionStore;
-    render_pass_desc.colorAttachments[0].clearColor = MTLClearColorMake(0, 0, 0, 1);
 
     // Load the shader library
     NSError *err = nullptr;
@@ -120,23 +122,6 @@ int main(int argc, const char **argv)
     if (!shader_library) {
         std::cout << "Failed to load shader library: " << [err.localizedDescription UTF8String]
                   << "\n";
-        return 1;
-    }
-
-    id<MTLFunction> vertex_shader = [shader_library newFunctionWithName:@"vertex_shader"];
-    id<MTLFunction> fragment_shader = [shader_library newFunctionWithName:@"fragment_shader"];
-
-    // Setup the render pipeline state
-    MTLRenderPipelineDescriptor *pipeline_desc = [[MTLRenderPipelineDescriptor alloc] init];
-    pipeline_desc.vertexFunction = vertex_shader;
-    pipeline_desc.fragmentFunction = fragment_shader;
-    pipeline_desc.colorAttachments[0].pixelFormat = metal_layer.pixelFormat;
-
-    id<MTLRenderPipelineState> pipeline =
-        [device newRenderPipelineStateWithDescriptor:pipeline_desc error:&err];
-    if (!pipeline) {
-        std::cout << "Failed to create render pipeline: " <<
-            [err.localizedDescription UTF8String] << "\n";
         return 1;
     }
 
@@ -166,62 +151,8 @@ int main(int argc, const char **argv)
         [MTLPrimitiveAccelerationStructureDescriptor descriptor];
     blas_desc.geometryDescriptors = @[geom_desc];
 
-    id<MTLAccelerationStructure> blas;
-    {
-        // Does it need an autoreleaseblock?
-        // Build then compact the BLAS
-        MTLAccelerationStructureSizes accel_sizes =
-            [device accelerationStructureSizesWithDescriptor:blas_desc];
-        std::cout << "Acceleration structure sizes:\n"
-                  << "\tstructure size: " << accel_sizes.accelerationStructureSize << "b\n"
-                  << "\tscratch size: " << accel_sizes.buildScratchBufferSize << "b\n";
-
-        id<MTLAccelerationStructure> scratch_blas =
-            [device newAccelerationStructureWithSize:accel_sizes.accelerationStructureSize];
-
-        id<MTLBuffer> scratch_buffer =
-            [device newBufferWithLength:accel_sizes.buildScratchBufferSize
-                                options:MTLResourceStorageModePrivate];
-
-        id<MTLCommandBuffer> command_buffer = [command_queue commandBuffer];
-        id<MTLAccelerationStructureCommandEncoder> command_encoder =
-            [command_buffer accelerationStructureCommandEncoder];
-
-        // Readback buffer to get the compacted size
-        id<MTLBuffer> compacted_size_buffer =
-            [device newBufferWithLength:sizeof(uint32_t) options:MTLResourceStorageModeShared];
-
-        // Queue the BLAS build
-        [command_encoder buildAccelerationStructure:scratch_blas
-                                         descriptor:blas_desc
-                                      scratchBuffer:scratch_buffer
-                                scratchBufferOffset:0];
-
-        // Get the compacted size back from the build
-        [command_encoder writeCompactedAccelerationStructureSize:scratch_blas
-                                                        toBuffer:compacted_size_buffer
-                                                          offset:0];
-
-        // Submit the buffer and wait for the build so we can read back the compact size
-        [command_encoder endEncoding];
-        [command_buffer commit];
-        [command_buffer waitUntilCompleted];
-
-        uint32_t compact_size = *reinterpret_cast<uint32_t *>(compacted_size_buffer.contents);
-        std::cout << "Compact size: " << compact_size << "b\n";
-
-        // Now allocate the compact BLAS and compact the structure into it
-        // For our single triangle BLAS this won't make it any smaller, but shows how it's done
-        blas = [device newAccelerationStructureWithSize:compact_size];
-        command_buffer = [command_queue commandBuffer];
-        command_encoder = [command_buffer accelerationStructureCommandEncoder];
-
-        [command_encoder copyAndCompactAccelerationStructure:scratch_blas
-                                     toAccelerationStructure:blas];
-        [command_encoder endEncoding];
-        [command_buffer commit];
-        // Could wait here again too
-    }
+    id<MTLAccelerationStructure> blas =
+        build_acceleration_structure(device, command_queue, blas_desc);
 
     // Setup an instance for this BLAS
     id<MTLBuffer> instance_buffer =
@@ -244,14 +175,36 @@ int main(int argc, const char **argv)
         [instance_buffer didModifyRange:NSMakeRange(0, instance_buffer.length)];
     }
 
-    id<MTLAccelerationStructure> tlas;
-    {
-        MTLInstanceAccelerationStructureDescriptor *tlas_desc =
-            [MTLInstanceAccelerationStructureDescriptor descriptor];
-        // tlas_desc.
-    }
-
     // Now build the TLAS
+    MTLInstanceAccelerationStructureDescriptor *tlas_desc =
+        [MTLInstanceAccelerationStructureDescriptor descriptor];
+    tlas_desc.instanceDescriptorBuffer = instance_buffer;
+    tlas_desc.instanceCount = 1;
+    tlas_desc.instanceDescriptorBufferOffset = 0;
+    tlas_desc.instanceDescriptorStride = sizeof(MTLAccelerationStructureInstanceDescriptor);
+
+    id<MTLAccelerationStructure> tlas =
+        build_acceleration_structure(device, command_queue, tlas_desc);
+
+    // Setup a compute pipeline to run our raytracing shader
+    id<MTLFunction> raygen_shader = [shader_library newFunctionWithName:@"raygen"];
+
+    // Setup the render pipeline state
+    MTLComputePipelineDescriptor *pipeline_desc = [[MTLComputePipelineDescriptor alloc] init];
+    pipeline_desc.computeFunction = raygen_shader;
+    // TODO later: enforce thread group size multiple and check in shader?
+    pipeline_desc.threadGroupSizeIsMultipleOfThreadExecutionWidth = NO;
+
+    id<MTLComputePipelineState> pipeline =
+        [device newComputePipelineStateWithDescriptor:pipeline_desc
+                                              options:0
+                                           reflection:nil
+                                                error:&err];
+    if (!pipeline) {
+        std::cout << "Failed to create compute pipeline: " <<
+            [err.localizedDescription UTF8String] << "\n";
+        return 1;
+    }
 
     bool done = false;
     while (!done) {
@@ -272,24 +225,17 @@ int main(int argc, const char **argv)
         @autoreleasepool {
             id<CAMetalDrawable> render_target = [metal_layer nextDrawable];
 
-            render_pass_desc.colorAttachments[0].texture = render_target.texture;
-
             id<MTLCommandBuffer> command_buffer = [command_queue commandBuffer];
-            id<MTLRenderCommandEncoder> command_encoder =
-                [command_buffer renderCommandEncoderWithDescriptor:render_pass_desc];
 
-            [command_encoder setViewport:(MTLViewport){0,
-                                                       0,
-                                                       static_cast<double>(win_width),
-                                                       static_cast<double>(win_height),
-                                                       0,
-                                                       1}];
-            // Render our triangle!
-            [command_encoder setRenderPipelineState:pipeline];
-            [command_encoder setVertexBuffer:vertex_buffer offset:0 atIndex:0];
-            [command_encoder drawPrimitives:MTLPrimitiveTypeTriangle
-                                vertexStart:0
-                                vertexCount:3];
+            id<MTLComputeCommandEncoder> command_encoder =
+                [command_buffer computeCommandEncoder];
+
+            // Raytrace it!
+            [command_encoder setTexture:render_target.texture atIndex:0];
+            [command_encoder setComputePipelineState:pipeline];
+            // TODO: Better thread group sizing here
+            [command_encoder dispatchThreadgroups:MTLSizeMake(win_width, win_height, 1)
+                           threadsPerThreadgroup:MTLSizeMake(1, 1, 1)];
 
             [command_encoder endEncoding];
             [command_buffer presentDrawable:render_target];
@@ -301,5 +247,67 @@ int main(int argc, const char **argv)
     SDL_Quit();
 
     return 0;
+}
+
+id<MTLAccelerationStructure> build_acceleration_structure(
+    id<MTLDevice> device,
+    id<MTLCommandQueue> command_queue,
+    MTLAccelerationStructureDescriptor *desc)
+{
+    // Does it need an autoreleaseblock?
+    // Build then compact the acceleration structure
+    MTLAccelerationStructureSizes accel_sizes =
+        [device accelerationStructureSizesWithDescriptor:desc];
+    std::cout << "Acceleration structure sizes:\n"
+              << "\tstructure size: " << accel_sizes.accelerationStructureSize << "b\n"
+              << "\tscratch size: " << accel_sizes.buildScratchBufferSize << "b\n";
+
+    id<MTLAccelerationStructure> scratch_as =
+        [device newAccelerationStructureWithSize:accel_sizes.accelerationStructureSize];
+
+    id<MTLBuffer> scratch_buffer =
+        [device newBufferWithLength:accel_sizes.buildScratchBufferSize
+                            options:MTLResourceStorageModePrivate];
+
+    id<MTLCommandBuffer> command_buffer = [command_queue commandBuffer];
+    id<MTLAccelerationStructureCommandEncoder> command_encoder =
+        [command_buffer accelerationStructureCommandEncoder];
+
+    // Readback buffer to get the compacted size
+    id<MTLBuffer> compacted_size_buffer =
+        [device newBufferWithLength:sizeof(uint32_t) options:MTLResourceStorageModeShared];
+
+    // Queue the build
+    [command_encoder buildAccelerationStructure:scratch_as
+                                     descriptor:desc
+                                  scratchBuffer:scratch_buffer
+                            scratchBufferOffset:0];
+
+    // Get the compacted size back from the build
+    [command_encoder writeCompactedAccelerationStructureSize:scratch_as
+                                                    toBuffer:compacted_size_buffer
+                                                      offset:0];
+
+    // Submit the buffer and wait for the build so we can read back the compact size
+    [command_encoder endEncoding];
+    [command_buffer commit];
+    [command_buffer waitUntilCompleted];
+
+    uint32_t compact_size = *reinterpret_cast<uint32_t *>(compacted_size_buffer.contents);
+    std::cout << "Compact size: " << compact_size << "b\n";
+
+    // Now allocate the compact AS and compact the structure into it
+    // For our single triangle AS this won't make it any smaller, but shows how it's done
+    id<MTLAccelerationStructure> compact_as =
+        [device newAccelerationStructureWithSize:compact_size];
+    command_buffer = [command_queue commandBuffer];
+    command_encoder = [command_buffer accelerationStructureCommandEncoder];
+
+    [command_encoder copyAndCompactAccelerationStructure:scratch_as
+                                 toAccelerationStructure:compact_as];
+    [command_encoder endEncoding];
+    [command_buffer commit];
+    // Could wait here again too
+    return compact_as;
 }
 
