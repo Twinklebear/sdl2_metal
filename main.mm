@@ -5,8 +5,8 @@
 #include <vector>
 #include <SDL.h>
 #include <SDL_syswm.h>
+#include <simd/simd.h>
 #include "metalview.h"
-#include "shader_types.h"
 
 int win_width = 1280;
 int win_height = 720;
@@ -126,10 +126,9 @@ int main(int argc, const char **argv)
     }
 
     // Upload vertex data
-    const Vertex vertex_data[] = {
-        {{-0.5, -0.5, 0}, {1, 0, 0}}, {{0, 0.5, 0}, {0, 1, 0}}, {{0.5, -0.5, 0}, {0, 0, 1}}};
+    const float vertex_data[] = {-0.5, -0.5, 0, 0, 0.5, 0, 0.5, -0.5, 0};
 
-    id<MTLBuffer> vertex_buffer = [device newBufferWithLength:3 * sizeof(Vertex)
+    id<MTLBuffer> vertex_buffer = [device newBufferWithLength:3 * 3 * sizeof(float)
                                                       options:MTLResourceStorageModeManaged];
     std::memcpy(vertex_buffer.contents, vertex_data, vertex_buffer.length);
     [vertex_buffer didModifyRange:NSMakeRange(0, vertex_buffer.length)];
@@ -138,7 +137,7 @@ int main(int argc, const char **argv)
     MTLAccelerationStructureTriangleGeometryDescriptor *geom_desc =
         [MTLAccelerationStructureTriangleGeometryDescriptor descriptor];
     geom_desc.vertexBuffer = vertex_buffer;
-    geom_desc.vertexStride = sizeof(Vertex);
+    geom_desc.vertexStride = 3 * sizeof(float);
     geom_desc.triangleCount = 1;
     // TODO: Seems like Metal is inline ray tracing style, but also has some stuff
     // for "opaque triangle" intersection functions and visible ones? How does the
@@ -178,6 +177,7 @@ int main(int argc, const char **argv)
     // Now build the TLAS
     MTLInstanceAccelerationStructureDescriptor *tlas_desc =
         [MTLInstanceAccelerationStructureDescriptor descriptor];
+    tlas_desc.instancedAccelerationStructures = @[blas];
     tlas_desc.instanceDescriptorBuffer = instance_buffer;
     tlas_desc.instanceCount = 1;
     tlas_desc.instanceDescriptorBufferOffset = 0;
@@ -232,10 +232,13 @@ int main(int argc, const char **argv)
 
             // Raytrace it!
             [command_encoder setTexture:render_target.texture atIndex:0];
+            [command_encoder setAccelerationStructure:tlas atBufferIndex:0];
+            [command_encoder useResource:blas usage:MTLResourceUsageRead];
             [command_encoder setComputePipelineState:pipeline];
-            // TODO: Better thread group sizing here
+            // TODO: Better thread group sizing here, this is a poor choice for utilization
+            // but keeps the example simple
             [command_encoder dispatchThreadgroups:MTLSizeMake(win_width, win_height, 1)
-                           threadsPerThreadgroup:MTLSizeMake(1, 1, 1)];
+                            threadsPerThreadgroup:MTLSizeMake(1, 1, 1)];
 
             [command_encoder endEncoding];
             [command_buffer presentDrawable:render_target];
@@ -307,7 +310,7 @@ id<MTLAccelerationStructure> build_acceleration_structure(
                                  toAccelerationStructure:compact_as];
     [command_encoder endEncoding];
     [command_buffer commit];
-    // Could wait here again too
+    [command_buffer waitUntilCompleted];
     return compact_as;
 }
 
