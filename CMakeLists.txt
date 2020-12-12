@@ -21,15 +21,22 @@ endif()
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Werror=objc-method-access")
 
 # Build the Metal shader library
-add_custom_command(OUTPUT shaders.metallib
+add_custom_command(OUTPUT shaders_metallib.h
     COMMAND xcrun -sdk macosx metal -c ${CMAKE_CURRENT_LIST_DIR}/shaders.metal -o shaders.air
     COMMAND xcrun -sdk macosx metallib shaders.air -o shaders.metallib
+    COMMAND ${CMAKE_COMMAND}
+        -DBIN_TO_H_BINARY_FILE=shaders.metallib
+        -DBIN_TO_H_OUTPUT=shaders_metallib.h
+        -DBIN_TO_H_VAR_NAME=shaders_metallib
+        -P ${CMAKE_CURRENT_LIST_DIR}/cmake/BinToH.cmake
     DEPENDS ${CMAKE_CURRENT_LIST_DIR}/shaders.metal
     BYPRODUCTS shaders.air)
 
-add_custom_target(shader_library_wrapper ALL DEPENDS shaders.metallib)
+add_custom_target(shader_library_wrapper ALL DEPENDS shaders_metallib.h)
 
 add_library(shader_library INTERFACE)
+target_include_directories(shader_library INTERFACE
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}>)
 add_dependencies(shader_library shader_library_wrapper)
 
 add_executable(sdl2_metal main.mm)

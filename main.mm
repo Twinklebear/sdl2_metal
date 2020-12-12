@@ -7,6 +7,7 @@
 #include <SDL_syswm.h>
 #include <simd/simd.h>
 #include "metalview.h"
+#include "shaders_metallib.h"
 
 int win_width = 1280;
 int win_height = 720;
@@ -118,7 +119,11 @@ int main(int argc, const char **argv)
 
     // Load the shader library
     NSError *err = nullptr;
-    id<MTLLibrary> shader_library = [device newLibraryWithFile:@"shaders.metallib" error:&err];
+    dispatch_data_t shader_library_data = dispatch_data_create(shaders_metallib,
+                                                               sizeof(shaders_metallib),
+                                                               nullptr,
+                                                               nullptr);
+    id<MTLLibrary> shader_library = [device newLibraryWithData:shader_library_data error:&err];
     if (!shader_library) {
         std::cout << "Failed to load shader library: " << [err.localizedDescription UTF8String]
                   << "\n";
