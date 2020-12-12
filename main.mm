@@ -167,10 +167,6 @@ int main(int argc, const char **argv)
 
         @autoreleasepool {
             id<CAMetalDrawable> render_target = [metal_layer nextDrawable];
-            if (!render_target) {
-                std::cout << "No render target?\n";
-                continue;
-            }
 
             render_pass_desc.colorAttachments[0].texture = render_target.texture;
 
