@@ -99,7 +99,7 @@ int main(int argc, const char **argv)
     NSArray<id<MTLDevice>> *devices = MTLCopyAllDevices();
     id<MTLDevice> device;
     for (id<MTLDevice> d in devices) {
-        if (d.supportsRaytracing && (!device || !device.isLowPower)) {
+        if (d.supportsRaytracing && (!device || !d.isLowPower)) {
             device = d;
         }
     }
