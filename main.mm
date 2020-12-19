@@ -3,68 +3,15 @@
 #include <iostream>
 #include <string>
 #include <vector>
+#include <Cocoa/Cocoa.h>
+#include <Metal/Metal.h>
+#include <QuartzCore/CAMetalLayer.h>
 #include <SDL.h>
 #include <SDL_syswm.h>
-#include "metalview.h"
 #include "shader_types.h"
 
 int win_width = 1280;
 int win_height = 720;
-
-@implementation AppMetalView
-
-// Return a Metal compatible layer
-+ (Class)layerClass
-{
-    // SDL does
-    // return NSClassFromString(@"CAMetalLayer");
-    return [CAMetalLayer class];
-}
-
-// Indicate we want to draw using a backing layer
-- (BOOL)wantsUpdateLayer
-{
-    return YES;
-}
-
-// Return an instance of the layer we want
-- (CALayer *)makeBackingLayer
-{
-    return [self.class.layerClass layer];
-}
-
-- (instancetype)initWithFrame:(NSRect)frame_rect
-{
-    self = [super initWithFrame:frame_rect];
-    if (self) {
-        self.wantsLayer = YES;
-        // TODO Later resizing support
-        // self.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
-        [self updateDrawableSize];
-    }
-    return self;
-}
-
-- (NSInteger)tag
-{
-    return APP_METAL_VIEW_TAG;
-}
-
-- (void)updateDrawableSize
-{
-    CAMetalLayer *metal_layer = (CAMetalLayer *)self.layer;
-    CGSize size = self.bounds.size;
-    metal_layer.contentsScale = 1.0;
-    metal_layer.drawableSize = size;
-}
-
-- (void)resizeWithOldSuperviewSize:(NSSize)old_size
-{
-    [super resizeWithOldSuperviewSize:old_size];
-    [self updateDrawableSize];
-}
-
-@end
 
 int main(int argc, const char **argv)
 {
@@ -85,7 +32,6 @@ int main(int argc, const char **argv)
     SDL_GetWindowWMInfo(window, &wm_info);
 
     NSWindow *nswindow = wm_info.info.cocoa.window;
-    NSView *view = nswindow.contentView;
 
     // TODO: Do I need an autorelease block wrapping everything below?
 
@@ -93,19 +39,18 @@ int main(int argc, const char **argv)
     NSArray<id<MTLDevice>> *devices = MTLCopyAllDevices();
     id<MTLDevice> device;
     for (id<MTLDevice> d in devices) {
-        if (d.supportsRaytracing && (!device || !device.isLowPower)) {
+        if (d.supportsRaytracing && (!device || !d.isLowPower)) {
             device = d;
         }
     }
     std::cout << "Selected Metal device " << [device.name UTF8String] << "\n";
 
-    AppMetalView *metal_view = [[AppMetalView alloc] initWithFrame:view.frame];
-    [view addSubview:metal_view];
-
     // Setup the Metal layer
-    CAMetalLayer *metal_layer = (CAMetalLayer *)[metal_view layer];
+    CAMetalLayer *metal_layer = [CAMetalLayer layer];
     metal_layer.device = device;
     metal_layer.pixelFormat = MTLPixelFormatBGRA8Unorm_sRGB;
+    nswindow.contentView.layer = metal_layer;
+    nswindow.contentView.wantsLayer = NO;
 
     id<MTLCommandQueue> command_queue = [device newCommandQueue];
 

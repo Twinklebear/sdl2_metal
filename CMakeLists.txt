@@ -29,6 +29,8 @@ add_custom_target(shader_library_wrapper ALL DEPENDS shaders.metallib)
 add_library(shader_library INTERFACE)
 add_dependencies(shader_library shader_library_wrapper)
 
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fobjc-arc -fobjc-weak")
+
 add_executable(sdl2_metal main.mm)
 
 set_target_properties(sdl2_metal PROPERTIES
